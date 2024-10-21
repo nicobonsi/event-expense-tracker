@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Tracker</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        table, th, td {
+            border: 1px solid black;
+        }
+        th, td {
+            padding: 8px;
+            text-align: center; /* Center all table content */
+            border-bottom: 1px solid black; /* Bottom line for each row */
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .slider {
+            margin-left: 10px;
+            width: 50%;
+        }
+    </style>
+</head>
+<body>
+
+<p>
+    Event Expense Tracker will help you easily track your expenses during an event with freinds. Enter the participants and create an expense. 
+    Specify who paid for it and how to split the expense, you can always edit and modify expenses later. At the end of the event, click 
+    calculate and it will say who owes what to whom. You can also export a .csv summary for future reference. When used 
+    on the same device, the expenses are kept in memory until the tracker is reset.
+</p>
+
+<h1>Event Expense Tracker
+    <button onclick="resetTracker()">Reset Tracker</button>
+</h1>
+
+<!-- Event setup -->
+<div>
+    <label for="eventName">Event Name:</label>
+    <input type="text" id="eventName" placeholder="e.g. Weekend in Barcelona">
+    <label for="eventStartDate">Start Date:</label>
+    <input type="date" id="eventStartDate">
+    <label for="eventEndDate">End Date:</label>
+    <input type="date" id="eventEndDate">
+</div>
+
+<!-- Add Participants -->
+<div>
+    <h3>Add Participants</h3>
+    <input type="text" id="participantName" placeholder="Participant Name">
+    <button onclick="addParticipant()">Add Participant</button>
+
+    <ul id="participantsList"></ul>
+</div>
+
+<!-- Add/Edit Expense -->
+<div>
+    <h3>Add/Edit Expense</h3>
+    <input type="text" id="expenseDesc" placeholder="Expense Description">
+    <input type="number" id="expenseAmount" placeholder="Amount (e.g. 50)" min="0" step="0.01">
+    
+    <label for="payer">Who Paid?</label>
+    <select id="payer"></select>
+
+    <h4>Assign Percentage to Participants (Total 100%):</h4>
+    <div id="participantShares"></div>
+    <button onclick="splitEvenly()">Split Evenly</button>
+    
+    <!-- Hidden input to store the index of the expense being edited -->
+    <input type="hidden" id="editIndex" value="">
+
+    <button id="saveExpenseButton" onclick="addExpense()">Add Expense</button>
+</div>
+
+<!-- Expense List -->
+<h3>Expense List</h3>
+<table>
+    <thead>
+        <tr>
+            <th>Description</th>
+            <th>Amount</th>
+            <th>Payer</th>
+            <th>Percentages</th>
+            <th>Action</th> <!-- Re-added Action column for Edit button -->
+        </tr>
+    </thead>
+    <tbody id="expenseTableBody"></tbody>
+</table>
+
+<!-- Final Summary -->
+<div>
+    <h3>Final Balance</h3>
+    <button onclick="calculateBalance()">Calculate Balance</button>
+    <ul id="balanceSummary"></ul>
+
+    <!-- Export to CSV Button -->
+    <button id="exportCsvButton" style="display: none;" onclick="exportToCSV()">Export to CSV</button>
+</div>
+
+<script>
+    let participants = [];
+    let expenses = [];
+    let eventDetails = {
+        name: '',
+        startDate: '',
+        endDate: ''
+    };
+    let transactions = []; // To store "who owes who" transactions
+
+    // Load data from localStorage on page load
+    window.onload = function() {
+        loadFromLocalStorage();
+    };
+
+    function addParticipant() {
+        const participantName = document.getElementById("participantName").value;
+        if (participantName && !participants.find(p => p.name === participantName)) {
+            participants.push({ name: participantName, balance: 0 });
+            document.getElementById("participantName").value = ''; // Clear the input field
+            updateParticipantList(); // Update the participant list display
+            updatePayerOptions();    // Update the options for who paid
+            updateShareFields();     // Update the share allocation sliders
+        } else {
+            alert("Please enter a unique participant name.");
+        }
+    }
+
+    function updateParticipantList() {
+        const list = document.getElementById("participantsList");
+        list.innerHTML = '';  // Clear the list to avoid duplication
+        participants.forEach(participant => {
+            const li = document.createElement('li');
+            li.textContent = participant.name;
+            list.appendChild(li);
+        });
+    }
+
+    function updatePayerOptions() {
+        const payerSelect = document.getElementById("payer");
+        payerSelect.innerHTML = '';  // Clear previous options
+        participants.forEach(participant => {
+            const option = document.createElement('option');
+            option.value = participant.name;
+            option.textContent = participant.name;
+            payerSelect.appendChild(option);
+        });
+    }
+
+    function updateShareFields() {
+        const shareDiv = document.getElementById("participantShares");
+        shareDiv.innerHTML = '';  // Clear previous sliders
+        participants.forEach((participant, index) => {
+            const container = document.createElement('div');
+            container.className = 'slider-container';
+
+            const label = document.createElement('label');
+            label.textContent = participant.name + ' (%)';
+
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.min = '0';
+            input.max = '100';
+            input.step = '1';
+            input.value = '0';
+            input.className = 'slider';
+            input.id = participant.name + '-share';
+            input.oninput = () => updateSliders(index);
+
+            const percentageDisplay = document.createElement('span');
+            percentageDisplay.id = participant.name + '-percentage';
+            percentageDisplay.textContent = '0%';
+
+            container.appendChild(label);
+            container.appendChild(input);
+            container.appendChild(percentageDisplay);
+            shareDiv.appendChild(container);
+        });
+    }
+
+    function updateSliders(changedIndex) {
+        const total = participants.reduce((sum, participant, index) => {
+            const slider = document.getElementById(participant.name + '-share');
+            return sum + (index !== changedIndex ? parseInt(slider.value) : 0);
+        }, 0);
+
+        const remaining = 100 - total;
+        const changedSlider = document.getElementById(participants[changedIndex].name + '-share');
+        changedSlider.value = Math.max(0, Math.min(remaining, changedSlider.value));
+
+        participants.forEach(participant => {
+            const slider = document.getElementById(participant.name + '-share');
+            const percentageDisplay = document.getElementById(participant.name + '-percentage');
+            percentageDisplay.textContent = slider.value + '%';
+        });
+    }
+
+    function splitEvenly() {
+        const numberOfParticipants = participants.length;
+        if (numberOfParticipants === 0) {
+            alert("No participants to split.");
+            return;
+        }
+
+        const evenSplit = Math.floor(100 / numberOfParticipants); // Even split
+        const remainder = 100 % numberOfParticipants; // Handle remainder
+
+        participants.forEach((participant, index) => {
+            const slider = document.getElementById(participant.name + '-share');
+            const percentageDisplay = document.getElementById(participant.name + '-percentage');
+            slider.value = index < remainder ? evenSplit + 1 : evenSplit;
+            percentageDisplay.textContent = slider.value + '%';
+        });
+    }
+
+    function addExpense() {
+        const description = document.getElementById("expenseDesc").value;
+        const amount = parseFloat(document.getElementById("expenseAmount").value);
+        const payer = document.getElementById("payer").value;
+        
+        if (description && amount && payer) {
+            let totalShare = 0;
+            const shares = {};
+            participants.forEach(participant => {
+                const share = parseFloat(document.getElementById(participant.name + '-share').value);
+                totalShare += share;
+                if (share > 0) {
+                    shares[participant.name] = share;
+                }
+            });
+
+            if (totalShare === 100) {
+                const editIndex = document.getElementById("editIndex").value;
+                if (editIndex === "") {
+                    // Add new expense
+                    expenses.push({
+                        description,
+                        amount,
+                        payer,
+                        shares
+                    });
+                } else {
+                    // Edit existing expense
+                    expenses[editIndex] = {
+                        description,
+                        amount,
+                        payer,
+                        shares
+                    };
+                    document.getElementById("editIndex").value = ""; // Clear the edit index
+                }
+                
+                // Save event details
+                eventDetails.name = document.getElementById("eventName").value;
+                eventDetails.startDate = document.getElementById("eventStartDate").value;
+                eventDetails.endDate = document.getElementById("eventEndDate").value;
+                saveToLocalStorage();
+                
+                updateExpenseTable();
+                resetForm(); // Clear the form fields after adding or editing
+            } else {
+                alert('Total percentage must be exactly 100%');
+            }
+        }
+    }
+
+    function updateExpenseTable() {
+        const tableBody = document.getElementById("expenseTableBody");
+        tableBody.innerHTML = '';
+        expenses.forEach((expense, index) => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${expense.description}</td>
+                <td>${expense.amount.toFixed(2)}</td>
+                <td>${expense.payer}</td>
+                <td>${Object.entries(expense.shares).map(([name, share]) => `${name}: ${share}%`).join(', ')}</td>
+                <td><button onclick="editExpense(${index})">Edit</button></td> <!-- Re-added Edit button -->
+            `;
+            tableBody.appendChild(row);
+        });
+    }
+
+    function editExpense(index) {
+        const expense = expenses[index];
+
+        // Populate the form fields with the current expense values
+        document.getElementById("expenseDesc").value = expense.description;
+        document.getElementById("expenseAmount").value = expense.amount;
+        document.getElementById("payer").value = expense.payer;
+
+        // Populate the percentage sliders with the current values
+        participants.forEach(participant => {
+            const slider = document.getElementById(participant.name + '-share');
+            const percentageDisplay = document.getElementById(participant.name + '-percentage');
+            slider.value = expense.shares[participant.name] || 0;
+            percentageDisplay.textContent = slider.value + '%';
+        });
+
+        // Store the index of the expense being edited
+        document.getElementById("editIndex").value = index;
+
+        // Change the button text to "Save Changes"
+        document.getElementById("saveExpenseButton").textContent = "Save Changes";
+        document.getElementById("saveExpenseButton").onclick = function() {
+            addExpense();
+        };
+    }
+
+    function resetForm() {
+        document.getElementById("expenseDesc").value = '';
+        document.getElementById("expenseAmount").value = '';
+        document.getElementById("payer").value = '';
+
+        // Reset the sliders
+        participants.forEach(participant => {
+            const slider = document.getElementById(participant.name + '-share');
+            const percentageDisplay = document.getElementById(participant.name + '-percentage');
+            slider.value = 0;
+            percentageDisplay.textContent = '0%';
+        });
+
+        // Reset the button to "Add Expense"
+        document.getElementById("saveExpenseButton").textContent = "Add Expense";
+        document.getElementById("saveExpenseButton").onclick = addExpense;
+    }
+
+    // Save data to localStorage
+    function saveToLocalStorage() {
+        localStorage.setItem('participants', JSON.stringify(participants));
+        localStorage.setItem('expenses', JSON.stringify(expenses));
+        localStorage.setItem('eventDetails', JSON.stringify(eventDetails));
+    }
+
+    // Load data from localStorage
+    function loadFromLocalStorage() {
+        const savedParticipants = localStorage.getItem('participants');
+        const savedExpenses = localStorage.getItem('expenses');
+        const savedEventDetails = localStorage.getItem('eventDetails');
+
+        if (savedParticipants) {
+            participants = JSON.parse(savedParticipants);
+            updateParticipantList();
+            updatePayerOptions();
+            updateShareFields();
+        }
+
+        if (savedExpenses) {
+            expenses = JSON.parse(savedExpenses);
+            updateExpenseTable();
+        }
+
+        if (savedEventDetails) {
+            eventDetails = JSON.parse(savedEventDetails);
+            document.getElementById("eventName").value = eventDetails.name;
+            document.getElementById("eventStartDate").value = eventDetails.startDate;
+            document.getElementById("eventEndDate").value = eventDetails.endDate;
+        }
+    }
+
+    // Reset tracker (clear localStorage and reset the app)
+    function resetTracker() {
+        if (confirm("Are you sure you want to reset the tracker? This will clear all saved data.")) {
+            localStorage.clear();
+            participants = [];
+            expenses = [];
+            eventDetails = { name: '', startDate: '', endDate: '' };
+            updateParticipantList();
+            updateExpenseTable();
+            resetForm();
+            document.getElementById("eventName").value = '';
+            document.getElementById("eventStartDate").value = '';
+            document.getElementById("eventEndDate").value = '';
+        }
+    }
+
+    function calculateBalance() {
+        // Reset all balances
+        participants.forEach(participant => participant.balance = 0);
+
+        expenses.forEach(expense => {
+            const payer = participants.find(p => p.name === expense.payer);
+            Object.entries(expense.shares).forEach(([name, share]) => {
+                const participant = participants.find(p => p.name === name);
+                const amountOwed = (expense.amount * (share / 100));
+                participant.balance -= amountOwed;  // They owe this much
+                payer.balance += amountOwed;  // Payer gets reimbursed
+            });
+        });
+
+        displayBalanceSummary();
+        settleDebts();  // Call to settle debts at the end
+        document.getElementById("exportCsvButton").style.display = "block"; // Show CSV export button
+    }
+
+    function displayBalanceSummary() {
+        const balanceSummary = document.getElementById("balanceSummary");
+        balanceSummary.innerHTML = '';  // Clear previous results
+
+        participants.forEach(participant => {
+            const li = document.createElement('li');
+            if (participant.balance > 0) {
+                li.textContent = `${participant.name} is owed €${participant.balance.toFixed(2)}`;
+            } else if (participant.balance < 0) {
+                li.textContent = `${participant.name} owes €${Math.abs(participant.balance).toFixed(2)}`;
+            } else {
+                li.textContent = `${participant.name} is settled up.`;
+            }
+            balanceSummary.appendChild(li);
+        });
+    }
+
+    function settleDebts() {
+        let debtors = [];  // Those who owe money
+        let creditors = []; // Those who are owed money
+
+        participants.forEach(participant => {
+            if (participant.balance < 0) {
+                debtors.push({ name: participant.name, amount: Math.abs(participant.balance) });
+            } else if (participant.balance > 0) {
+                creditors.push({ name: participant.name, amount: participant.balance });
+            }
+        });
+
+        transactions = [];
+        let i = 0;
+        let j = 0;
+
+        // Match debtors with creditors
+        while (i < debtors.length && j < creditors.length) {
+            let debt = debtors[i];
+            let credit = creditors[j];
+
+            // Determine the payment amount (smallest between debt and credit)
+            let payment = Math.min(debt.amount, credit.amount);
+
+            // Record the transaction
+            transactions.push(`${debt.name} pays ${credit.name} €${payment.toFixed(2)}`);
+
+            // Update amounts
+            debt.amount -= payment;
+            credit.amount -= payment;
+
+            // Move to next debtor or creditor if they've been fully settled
+            if (debt.amount === 0) {
+                i++;
+            }
+            if (credit.amount === 0) {
+                j++;
+            }
+        }
+
+        displaySettlement(transactions);
+    }
+
+    function displaySettlement(transactions) {
+        const balanceSummary = document.getElementById("balanceSummary");
+        balanceSummary.innerHTML = ''; // Clear previous settlement details
+        const settlementHeader = document.createElement('h4');
+        settlementHeader.textContent = "Final Settlements (Who pays whom)";
+        balanceSummary.appendChild(settlementHeader);
+
+        transactions.forEach(transaction => {
+            const li = document.createElement('li');
+            li.textContent = transaction;
+            balanceSummary.appendChild(li);
+        });
+    }
+
+    function exportToCSV() {
+        let csvContent = "data:text/csv;charset=utf-8,";
+
+        // Event details
+        csvContent += `Event: ${document.getElementById("eventName").value}\n`;
+        csvContent += `Start Date: ${document.getElementById("eventStartDate").value}\n`;
+        csvContent += `End Date: ${document.getElementById("eventEndDate").value}\n\n`;
+
+        // Expense records
+        csvContent += "Description,Amount,Payer,Shares\n";
+        expenses.forEach(expense => {
+            csvContent += `${expense.description},${expense.amount.toFixed(2)},${expense.payer},${Object.entries(expense.shares).map(([name, share]) => `${name}: ${share}%`).join(', ')}\n`;
+        });
+
+        // Balance summary
+        csvContent += "\nParticipant,Balance\n";
+        participants.forEach(participant => {
+            csvContent += `${participant.name},${participant.balance.toFixed(2)}\n`;
+        });
+
+        // Add "Who owes who" section to CSV
+        csvContent += "\nWho Owes Who:\n";
+        transactions.forEach(transaction => {
+            csvContent += `${transaction}\n`;
+        });
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "expense_summary.csv");
+        document.body.appendChild(link);
+
+        link.click();
+        document.body.removeChild(link); // Remove the link after downloading
+    }
+</script>
+
+</body>
+</html>
